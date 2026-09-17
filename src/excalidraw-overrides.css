@@ -1,0 +1,46 @@
+/* Pindahkan toolbar utama ke bawah */
+.excalidraw .App-toolbar-container {
+  position: fixed;
+  top: auto;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* Sembunyikan/pindahkan help text supaya gak ketimpa toolbar bawah */
+.excalidraw .HintViewer {
+  bottom: 80px;
+  top: auto;
+}
+
+/* Zoom & undo/redo panel — biarkan di kiri bawah, tapi geser dikit biar gak tabrakan */
+.excalidraw .zoom-actions,
+.excalidraw .undo-redo-buttons {
+  bottom: 12px;
+}
+
+/* Library panel kanan atas — biarkan default atau sesuaikan kalau perlu */
+
+
+/* === Baris atas: menu, zoom, undo/redo sejajar kiri ke kanan === */
+.excalidraw .zoom-actions {
+  position: fixed;
+  top: 15px;
+  left: 70px;
+  bottom: auto;
+}
+
+.excalidraw .undo-redo-buttons {
+  position: fixed;
+  top: 15px;
+  left: 210px;
+  bottom: auto;
+}
+
+/* === Panel properties (Stroke, Background, Sloppiness, dll) ke kanan === */
+.excalidraw .App-menu__left {
+  position: fixed;
+  left: auto;
+  right: 12px;
+  top: 70px;
+}
