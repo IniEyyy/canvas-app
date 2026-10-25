@@ -12,8 +12,10 @@
     "fs:allow-write-file",
     "fs:allow-read-dir",
     "fs:allow-mkdir",
+    "fs:allow-remove",
     "fs:allow-exists",
     "fs:scope-appdata",
+    "core:window:allow-set-title",
     "dialog:default",
     {
       "identifier": "fs:scope",

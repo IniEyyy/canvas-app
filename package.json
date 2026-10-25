@@ -2,6 +2,8 @@
   "name": "canvas-app",
   "private": true,
   "version": "0.1.0",
+  "description": "A local-first, multi-board Excalidraw whiteboard built with Tauri, React, and TypeScript.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
