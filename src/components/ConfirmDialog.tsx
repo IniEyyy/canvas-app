@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import type { ReactNode } from 'react'
 import { TrashIcon } from './icons'
 
 type Props = {
@@ -8,6 +9,7 @@ type Props = {
   confirmLabel: string
   danger?: boolean
   busy?: boolean
+  icon?: ReactNode
   onCancel: () => void
   onConfirm: () => void
 }
@@ -19,6 +21,7 @@ export function ConfirmDialog({
   confirmLabel,
   danger = false,
   busy = false,
+  icon,
   onCancel,
   onConfirm,
 }: Props) {
@@ -31,8 +34,12 @@ export function ConfirmDialog({
         onConfirm()
       }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    // Defer attaching so the key press that opened the dialog can't confirm it.
+    const attach = window.setTimeout(() => window.addEventListener('keydown', onKeyDown), 0)
+    return () => {
+      window.clearTimeout(attach)
+      window.removeEventListener('keydown', onKeyDown)
+    }
   }, [open, busy, onCancel, onConfirm])
 
   if (!open) return null
@@ -46,7 +53,7 @@ export function ConfirmDialog({
     >
       <div className="modal-panel confirm-panel" role="alertdialog" aria-modal="true" aria-label={title}>
         <span className={`confirm-icon${danger ? ' danger' : ''}`}>
-          <TrashIcon size={20} />
+          {icon ?? <TrashIcon size={20} />}
         </span>
         <h2>{title}</h2>
         <p>{body}</p>

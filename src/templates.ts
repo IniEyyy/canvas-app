@@ -358,7 +358,7 @@ export const TEMPLATES: TemplateDef[] = [
       polyline(
         [
           [470, 390],
-          [300, 270],
+          [290, 270],
         ],
         C.faint,
         true,
@@ -366,7 +366,7 @@ export const TEMPLATES: TemplateDef[] = [
       polyline(
         [
           [470, 430],
-          [300, 540],
+          [290, 540],
         ],
         C.faint,
         true,
@@ -374,7 +374,7 @@ export const TEMPLATES: TemplateDef[] = [
       polyline(
         [
           [600, 330],
-          [480, 220],
+          [530, 266],
         ],
         C.faint,
         true,
@@ -382,7 +382,7 @@ export const TEMPLATES: TemplateDef[] = [
       polyline(
         [
           [600, 450],
-          [480, 600],
+          [464, 620],
         ],
         C.faint,
         true,
@@ -551,10 +551,15 @@ export const TEMPLATES: TemplateDef[] = [
       branches.forEach((branch) => {
         const bx = branch.x + branch.w / 2
         const by = branch.y + branch.h / 2
+        const cx = center.x + center.w / 2
+        const cy = center.y + center.h / 2
+        const dx = bx - cx
+        const dy = by - cy
+        const reach = 1 / Math.hypot(dx / (center.w / 2), dy / (center.h / 2))
         elements.push(
           polyline(
             [
-              [center.x + center.w / 2, center.y + center.h / 2],
+              [cx + dx * reach, cy + dy * reach],
               [bx, by],
             ],
             C.line,
@@ -663,8 +668,8 @@ export const TEMPLATES: TemplateDef[] = [
         )
       })
       elements.push(
-        rect({ x: 610, y: 208, w: 180, h: 360, fill: 'transparent', stroke: C.ink, strokeStyle: 'dashed', strokeWidth: 1.5, rough: 0 }),
-        textEl('Moment of truth', 610, 185, 13, C.ink),
+        rect({ x: 610, y: 222, w: 165, h: 368, fill: 'transparent', stroke: C.ink, strokeStyle: 'dashed', strokeWidth: 1.5, rough: 0 }),
+        textEl('Moment of truth', 610, 200, 13, C.ink),
         textEl('Ask: where do users get stuck, and why?', 40, 680, 14, C.faint),
       )
       return elements
@@ -851,16 +856,25 @@ export const TEMPLATES: TemplateDef[] = [
         subtitle('Outcomes over features. Progress over promises.'),
         arrow(70, 420, 1160, 420, C.ink, false, true),
         ...quarters.map((quarter) =>
-          rect({ x: quarter.x - 10, y: 404, w: 20, h: 20, fill: quarter.fill, stroke: C.ink, rough: 0 }),
+          rect({ x: quarter.x + 90, y: 404, w: 20, h: 20, fill: quarter.fill, stroke: C.ink, rough: 0 }),
         ),
       ]
       quarters.forEach((quarter) => {
+        const above = quarter.y < 420
         elements.push(
           rect({ x: quarter.x, y: quarter.y, w: 200, h: 140, fill: quarter.fill, stroke: 'transparent', rough: 0 }),
           textEl(quarter.quarter, quarter.x + 20, quarter.y + 16, 14),
           textEl(quarter.focus, quarter.x + 20, quarter.y + 42, 19),
           textEl(quarter.outcome, quarter.x + 20, quarter.y + 82, 13, C.muted),
-          polyline([[quarter.x + 100, quarter.y + 140], [quarter.x + 100, 404]], C.faint, true, 1),
+          polyline(
+            [
+              [quarter.x + 100, above ? quarter.y + 140 : quarter.y],
+              [quarter.x + 100, above ? 404 : 424],
+            ],
+            C.faint,
+            true,
+            1,
+          ),
         )
       })
       elements.push(

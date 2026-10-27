@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { TEMPLATES, type TemplateCategory } from '../templates'
+import type { TemplateDef } from '../templates'
+import { getTemplatePreview } from '../utils/templatePreview'
 import { CloseIcon, SearchIcon, TemplateGlyph } from './icons'
 
 type Props = {
   open: boolean
   busy: boolean
+  theme: 'light' | 'dark'
   onClose: () => void
   onPick: (id: string) => void
 }
@@ -22,7 +25,7 @@ const CATEGORIES: Array<TemplateCategory | 'All'> = [
   'Presenting',
 ]
 
-export function TemplatePicker({ open, busy, onClose, onPick }: Props) {
+export function TemplatePicker({ open, busy, theme, onClose, onPick }: Props) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<TemplateCategory | 'All'>('All')
   const searchRef = useRef<HTMLInputElement>(null)
@@ -106,28 +109,13 @@ export function TemplatePicker({ open, busy, onClose, onPick }: Props) {
 
         <div className="template-grid">
           {filtered.map((template) => (
-            <button
+            <TemplateCard
               key={template.id}
-              type="button"
-              className="template-card"
-              onClick={() => onPick(template.id)}
-              disabled={busy}
-              style={{ ['--card-accent' as string]: template.accent }}
-            >
-              <span
-                className="template-preview"
-                style={{ background: `linear-gradient(135deg, ${template.accent}26, ${template.accent}0a)` }}
-              >
-                <span className="template-glyph" style={{ color: template.accent, background: `${template.accent}1f` }}>
-                  <TemplateGlyph name={template.icon} size={24} />
-                </span>
-                <span className="template-category">{template.category}</span>
-              </span>
-              <span className="template-copy">
-                <strong>{template.name}</strong>
-                <span>{template.description}</span>
-              </span>
-            </button>
+              template={template}
+              theme={theme}
+              busy={busy}
+              onPick={onPick}
+            />
           ))}
           {!filtered.length && (
             <div className="template-empty">
@@ -148,5 +136,58 @@ export function TemplatePicker({ open, busy, onClose, onPick }: Props) {
         </footer>
       </div>
     </div>
+  )
+}
+
+function TemplateCard({
+  template,
+  theme,
+  busy,
+  onPick,
+}: {
+  template: TemplateDef
+  theme: 'light' | 'dark'
+  busy: boolean
+  onPick: (id: string) => void
+}) {
+  const [preview, setPreview] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setPreview(null)
+    getTemplatePreview(template.id, theme).then((url) => {
+      if (!cancelled) setPreview(url)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [template.id, theme])
+
+  return (
+    <button
+      type="button"
+      className="template-card"
+      onClick={() => onPick(template.id)}
+      disabled={busy}
+      style={{ ['--card-accent' as string]: template.accent }}
+    >
+      <span
+        className="template-preview"
+        style={{ background: `linear-gradient(135deg, ${template.accent}26, ${template.accent}0a)` }}
+      >
+        {preview ? (
+          <img className="template-preview-image" src={preview} alt="" loading="lazy" draggable={false} />
+        ) : (
+          <span className="template-glyph" style={{ color: template.accent, background: `${template.accent}1f` }}>
+            <TemplateGlyph name={template.icon} size={24} />
+          </span>
+        )}
+        <span className="template-category">{template.category}</span>
+      </span>
+      <span className="template-copy">
+        <strong>{template.name}</strong>
+        <span>{template.description}</span>
+      </span>
+    </button>
   )
 }

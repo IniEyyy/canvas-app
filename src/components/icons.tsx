@@ -238,6 +238,56 @@ export function CheckIcon(props: IconProps) {
   )
 }
 
+export function HistoryIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.8" />
+      <path d="M4 4v4.8h4.8" />
+      <path d="M12 8v4.5l3 1.8" />
+    </Icon>
+  )
+}
+
+export function TagIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3 11V4a1 1 0 0 1 1-1h7l10 10-8 8L3 11Z" />
+      <circle cx="7.6" cy="7.6" r="1.4" />
+    </Icon>
+  )
+}
+
+export function LinkIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 1 0-5.7-5.7L11.6 6.7" />
+      <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 1 0 5.7 5.7l1.4-1.4" />
+    </Icon>
+  )
+}
+
+export function LayoutIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="2.4" />
+      <circle cx="5" cy="5.5" r="2.1" />
+      <circle cx="19" cy="5.5" r="2.1" />
+      <circle cx="5" cy="18.5" r="2.1" />
+      <circle cx="19" cy="18.5" r="2.1" />
+      <path d="m9.9 10.6-3.2-3.4M14.1 10.6l3.2-3.4M9.9 13.4l-3.2 3.4M14.1 13.4l3.2 3.4" />
+    </Icon>
+  )
+}
+
+export function MarkdownIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <path d="M6.5 15V9l2.5 3 2.5-3v6M15 9v6M15 15l2-2M15 15l-2-2" />
+    </Icon>
+  )
+}
+
 export function TemplateGlyph({ name, size = 22 }: { name: TemplateIcon; size?: number }) {
   const props = { size }
   switch (name) {

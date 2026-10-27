@@ -8,14 +8,18 @@ import {
 import '@excalidraw/excalidraw/index.css'
 import './excalidraw-overrides.css'
 import './App.css'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { BinaryFiles } from '@excalidraw/excalidraw/types'
 import { isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { BoardDrawer } from './components/BoardDrawer'
+import { QuickSwitcher } from './components/QuickSwitcher'
 import { TemplatePicker } from './components/TemplatePicker'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { HistoryDialog } from './components/HistoryDialog'
+import { LinkBoardDialog } from './components/LinkBoardDialog'
+import { TagsDialog } from './components/TagsDialog'
 import { PresentationBar, SavePill, ZenBar } from './components/Chrome'
 import {
   BoardsIcon,
@@ -23,15 +27,24 @@ import {
   DownloadIcon,
   DuplicateIcon,
   FocusIcon,
+  HistoryIcon,
+  LayoutIcon,
+  LinkIcon,
   LogoMark,
+  MarkdownIcon,
+  MoonIcon,
   PlayIcon,
   SaveIcon,
+  SearchIcon,
+  SunIcon,
   TemplateIcon,
   TrashIcon,
   UploadIcon,
 } from './components/icons'
 import {
   createBoard,
+  createBoardSnapshot,
+  createWorkspaceBackup,
   deleteBoard as removeBoardFromStorage,
   duplicateBoard,
   getStorageLocation,
@@ -39,16 +52,24 @@ import {
   isDesktopApp,
   readBoard,
   renameBoard,
+  restoreBoardSnapshot,
+  restoreWorkspaceBackup,
   saveBoard,
+  searchBoardContents,
   setActiveBoard,
   setBoardStarred,
+  setBoardTags,
 } from './storage'
 import { normalizeScene, cleanAppState, toInitialData } from './scene'
 import { getTemplate, prepareTemplateFonts, sceneForTemplate } from './templates'
-import type { BoardIndex, BoardMeta, SaveState, ThemePreference } from './types'
-import { pickFile } from './utils/files'
+import type { BoardIndex, BoardMeta, BoardSnapshot, SaveState, SceneData, ThemePreference } from './types'
+import { pickFile, saveBlob } from './utils/files'
 import { runExport, type ExportKind } from './utils/exportScene'
 import { isUrl } from './utils/dataUrl'
+import { workspaceToMarkdown } from './utils/markdown'
+import { arrangeMindMap, type MindMapLayout } from './utils/layout'
+
+const BOARD_LINK_PREFIX = 'canvas://board/'
 
 const DEBOUNCE_MS = 800
 const THEME_KEY = 'canvas-app:theme'
@@ -83,6 +104,16 @@ function readThemePreference(): ThemePreference {
   return 'system'
 }
 
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return 'Could not open local storage.'
+  }
+}
+
 function uniqueBoardName(base: string, boards: BoardMeta[]): string {
   const names = new Set(boards.map((board) => board.name.toLowerCase()))
   if (!names.has(base.toLowerCase())) return base
@@ -103,6 +134,7 @@ export default function App() {
     appState: string
   } | null>(null)
   const fitOnOpenRef = useRef(false)
+  const focusElementRef = useRef<string | null>(null)
   const presentationRef = useRef<PresentationState | null>(null)
 
   const [boardIndex, setBoardIndex] = useState<BoardIndex | null>(null)
@@ -111,6 +143,7 @@ export default function App() {
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [templateOpen, setTemplateOpen] = useState(false)
+  const [quickOpen, setQuickOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<BoardMeta | null>(null)
   const [presentation, setPresentation] = useState<PresentationState | null>(null)
   const [presentationMask, setPresentationMask] = useState<PresentationMask | null>(null)
@@ -122,9 +155,23 @@ export default function App() {
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
   )
+  const [tagsBoard, setTagsBoard] = useState<BoardMeta | null>(null)
+  const [historyBoard, setHistoryBoard] = useState<BoardMeta | null>(null)
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [arrangePlan, setArrangePlan] = useState<MindMapLayout | null>(null)
 
   const resolvedTheme = themePref === 'system' ? (systemDark ? 'dark' : 'light') : themePref
   const desktop = isDesktopApp()
+  const allTags = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const item of boardIndex?.boards ?? []) {
+      for (const tag of item.tags) {
+        const key = tag.toLowerCase()
+        if (!seen.has(key)) seen.set(key, tag)
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b))
+  }, [boardIndex])
 
   const toast = useCallback((message: string) => {
     apiRef.current?.setToast({ message, duration: 3500, closable: true })
@@ -211,7 +258,7 @@ export default function App() {
         setSaveState('saved')
       } catch (error) {
         console.error('Could not initialize boards:', error)
-        if (!cancelled) setFatalError(error instanceof Error ? error.message : 'Could not open local storage.')
+        if (!cancelled) setFatalError(describeError(error))
       }
     })()
     return () => {
@@ -296,6 +343,19 @@ export default function App() {
     toast(ok ? 'Board saved locally' : 'Could not save board — check the save status')
   }, [flushSave, toast])
 
+  const revealElement = useCallback(
+    (api: ExcalidrawImperativeAPI, elementId: string) => {
+      const element = api.getSceneElements().find((item) => item.id === elementId && !item.isDeleted)
+      if (!element) {
+        toast('That canvas item is no longer on the board')
+        return
+      }
+      api.updateScene({ appState: { selectedElementIds: { [elementId]: true } } })
+      api.scrollToContent(element, { animate: true, duration: 320 })
+    },
+    [toast],
+  )
+
   const openBoard = useCallback(
     async (id: string) => {
       if (!boardIndex) return
@@ -324,6 +384,46 @@ export default function App() {
       }
     },
     [boardIndex, flushSave, toast],
+  )
+
+  const openBoardAtElement = useCallback(
+    async (boardId: string, elementId: string) => {
+      if (!boardIndex) return
+      setDrawerOpen(false)
+      if (boardRef.current?.id === boardId) {
+        const api = apiRef.current
+        if (api) revealElement(api, elementId)
+        return
+      }
+      const meta = boardIndex.boards.find((item) => item.id === boardId)
+      if (!meta) return
+      setBusy(true)
+      try {
+        await flushSave()
+        const scene = await readBoard(boardId)
+        const nextIndex = await setActiveBoard(boardId)
+        boardRef.current = meta
+        setBoard(meta)
+        setBoardIndex(nextIndex)
+        focusElementRef.current = elementId
+        setInitialData(toInitialData(scene))
+        setSaveState('saved')
+      } catch (error) {
+        console.error('Could not open search result:', error)
+        toast('Could not open that board')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [boardIndex, flushSave, revealElement, toast],
+  )
+
+  const searchCanvasText = useCallback(
+    async (query: string) => {
+      if (pendingRef.current) await flushSave()
+      return searchBoardContents(query)
+    },
+    [flushSave],
   )
 
   const createFromTemplate = useCallback(
@@ -430,6 +530,212 @@ export default function App() {
     [toast],
   )
 
+  const handleSetTags = useCallback(
+    async (id: string, tags: string[]) => {
+      setBusy(true)
+      try {
+        const updated = await setBoardTags(id, tags)
+        boardRef.current = boardRef.current?.id === id ? updated : boardRef.current
+        setBoard((previous) => (previous?.id === id ? updated : previous))
+        setBoardIndex((previous) =>
+          previous
+            ? { ...previous, boards: previous.boards.map((item) => (item.id === id ? updated : item)) }
+            : previous,
+        )
+        setTagsBoard(null)
+        toast(updated.tags.length ? 'Tags saved' : 'Tags cleared')
+      } catch (error) {
+        console.error('Could not save tags:', error)
+        toast('Could not save the tags')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [toast],
+  )
+
+  const openHistory = useCallback(
+    (target: BoardMeta) => {
+      setTagsBoard(null)
+      setLinkOpen(false)
+      setDrawerOpen(false)
+      setQuickOpen(false)
+      void (async () => {
+        await flushSave()
+        setHistoryBoard(target)
+      })()
+    },
+    [flushSave],
+  )
+
+  const handleCreateSnapshot = useCallback(
+    async (boardId: string) => {
+      const ok = await flushSave()
+      if (!ok) throw new Error('Save the board before taking a snapshot.')
+      await createBoardSnapshot(boardId, 'manual')
+      toast('Snapshot saved')
+    },
+    [flushSave, toast],
+  )
+
+  const handleRestoreVersion = useCallback(
+    async (target: BoardMeta, snapshot: BoardSnapshot) => {
+      setBusy(true)
+      try {
+        await flushSave()
+        const result = await restoreBoardSnapshot(target.id, snapshot.id)
+        const isActive = boardRef.current?.id === target.id
+        let nextIndex: BoardIndex
+        if (isActive) {
+          const api = apiRef.current
+          const files = Object.values(result.scene.files ?? {}) as any[]
+          if (files.length) api?.addFiles(files)
+          api?.updateScene({ elements: result.scene.elements as any })
+          boardRef.current = result.meta
+          setBoard(result.meta)
+          nextIndex = result.index
+        } else {
+          nextIndex = await setActiveBoard(target.id)
+          boardRef.current = result.meta
+          setBoard(result.meta)
+          setInitialData(toInitialData(result.scene))
+        }
+        setBoardIndex(nextIndex)
+        setSaveState('saved')
+        setHistoryBoard(null)
+        setDrawerOpen(false)
+        toast('Version restored')
+      } catch (error) {
+        console.error('Could not restore the version:', error)
+        toast(error instanceof Error ? error.message : 'Could not restore that version')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [flushSave, toast],
+  )
+
+  const handleExportMarkdown = useCallback(async () => {
+    if (!boardIndex) return
+    setBusy(true)
+    try {
+      await flushSave()
+      const entries: Array<{ board: BoardMeta; scene: SceneData }> = []
+      for (const meta of boardIndex.boards) {
+        entries.push({ board: meta, scene: await readBoard(meta.id) })
+      }
+      const markdown = workspaceToMarkdown(entries)
+      const stamp = new Date().toISOString().slice(0, 10)
+      const saved = await saveBlob(
+        new Blob([markdown], { type: 'text/markdown;charset=utf-8' }),
+        `canvas-workspace-${stamp}.md`,
+        { name: 'Markdown export', extensions: ['md'] },
+      )
+      if (saved) {
+        toast(`Exported ${entries.length} ${entries.length === 1 ? 'board' : 'boards'} to Markdown`)
+      }
+    } catch (error) {
+      console.error('Markdown export failed:', error)
+      toast('Could not export the workspace to Markdown')
+    } finally {
+      setBusy(false)
+    }
+  }, [boardIndex, flushSave, toast])
+
+  const startLinkSelection = useCallback(() => {
+    const api = apiRef.current
+    if (!api) return
+    const selected = api.getAppState().selectedElementIds ?? {}
+    if (!Object.keys(selected).some((id) => selected[id])) {
+      toast('Select one or more shapes first, then link them to a board')
+      return
+    }
+    setDrawerOpen(false)
+    setTemplateOpen(false)
+    setQuickOpen(false)
+    setLinkOpen(true)
+  }, [toast])
+
+  const handleLinkToBoard = useCallback(
+    (boardId: string) => {
+      const api = apiRef.current
+      const target = boardIndex?.boards.find((item) => item.id === boardId)
+      if (!api || !target) return
+      const selected = api.getAppState().selectedElementIds ?? {}
+      const ids = new Set(Object.keys(selected).filter((id) => selected[id]))
+      if (!ids.size) {
+        setLinkOpen(false)
+        toast('Nothing is selected any more')
+        return
+      }
+      const link = `${BOARD_LINK_PREFIX}${boardId}`
+      const elements = api
+        .getSceneElements()
+        .map((element) => (ids.has(element.id) ? { ...element, link } : element))
+      api.updateScene({ elements })
+      setLinkOpen(false)
+      toast(`Linked the selection to “${target.name}”`)
+    },
+    [boardIndex, toast],
+  )
+
+  const handleLinkOpen = useCallback(
+    (element: any, event: any) => {
+      const link = typeof element?.link === 'string' ? element.link : ''
+      if (!link.startsWith(BOARD_LINK_PREFIX)) return
+      event.preventDefault()
+      const boardId = decodeURIComponent(link.slice(BOARD_LINK_PREFIX.length)).split(/[/?#]/)[0]
+      if (!boardId) return
+      if (boardId === boardRef.current?.id) {
+        toast('You are already on that board')
+        return
+      }
+      if (!boardIndex?.boards.some((item) => item.id === boardId)) {
+        toast('The linked board no longer exists')
+        return
+      }
+      void openBoard(boardId)
+    },
+    [boardIndex, openBoard, toast],
+  )
+
+  const startArrange = useCallback(() => {
+    const api = apiRef.current
+    if (!api) return
+    const plan = arrangeMindMap(api.getSceneElements())
+    if (!plan || plan.moved === 0) {
+      toast('Add at least three loose shapes with connectors to arrange a mind map')
+      return
+    }
+    setDrawerOpen(false)
+    setQuickOpen(false)
+    setArrangePlan(plan)
+  }, [toast])
+
+  const applyArrange = useCallback(async () => {
+    const api = apiRef.current
+    const plan = arrangePlan
+    if (!api || !plan) return
+    setBusy(true)
+    try {
+      const ok = await flushSave()
+      if (!ok) throw new Error('The board could not be saved before arranging.')
+      const current = boardRef.current
+      if (current) {
+        await createBoardSnapshot(current.id, 'before-layout').catch(() => undefined)
+      }
+      api.updateScene({ elements: plan.elements as any })
+      api.scrollToContent(plan.elements as any, { fitToContent: true, animate: true })
+      setArrangePlan(null)
+      toast('Mind map arranged — the previous version is in Version history')
+    } catch (error) {
+      console.error('Could not arrange the mind map:', error)
+      toast(error instanceof Error ? error.message : 'Could not arrange the shapes')
+    } finally {
+      setBusy(false)
+    }
+  }, [arrangePlan, flushSave, toast])
+
   const handleDelete = useCallback(async () => {
     const target = deleteTarget
     if (!target || !boardIndex) return
@@ -496,6 +802,52 @@ export default function App() {
       setBusy(false)
     }
   }, [boardIndex, flushSave, toast])
+
+  const handleBackup = useCallback(async () => {
+    setBusy(true)
+    try {
+      await flushSave()
+      const backup = await createWorkspaceBackup()
+      const stamp = new Date().toISOString().slice(0, 10)
+      const saved = await saveBlob(
+        new Blob([JSON.stringify(backup)], { type: 'application/json' }),
+        `canvas-workspace-${stamp}.json`,
+        { name: 'Canvas workspace backup', extensions: ['json'] },
+      )
+      if (saved) {
+        const count = backup.boards.length
+        toast(`Backed up ${count} ${count === 1 ? 'board' : 'boards'}`)
+      }
+    } catch (error) {
+      console.error('Backup failed:', error)
+      toast('Could not create the workspace backup')
+    } finally {
+      setBusy(false)
+    }
+  }, [flushSave, toast])
+
+  const handleRestore = useCallback(async () => {
+    const file = await pickFile('.json,application/json')
+    if (!file) return
+    setBusy(true)
+    try {
+      await flushSave()
+      let raw: unknown
+      try {
+        raw = JSON.parse(await file.text())
+      } catch {
+        throw new Error('That file is not valid JSON.')
+      }
+      const result = await restoreWorkspaceBackup(raw)
+      setBoardIndex(result.index)
+      toast(`Restored ${result.count} ${result.count === 1 ? 'board' : 'boards'}`)
+    } catch (error) {
+      console.error('Restore failed:', error)
+      toast(error instanceof Error ? error.message : 'That backup could not be restored')
+    } finally {
+      setBusy(false)
+    }
+  }, [flushSave, toast])
 
   const handleExport = useCallback(
     async (kind: ExportKind) => {
@@ -638,6 +990,20 @@ export default function App() {
         return
       }
 
+      if (mod && key === 'k') {
+        event.preventDefault()
+        setDrawerOpen(false)
+        setTemplateOpen(false)
+        setQuickOpen((previous) => !previous)
+        return
+      }
+      if (quickOpen) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          setQuickOpen(false)
+        }
+        return
+      }
       if (mod && key === 's') {
         event.preventDefault()
         void saveNow()
@@ -682,6 +1048,7 @@ export default function App() {
     deleteTarget,
     zen,
     drawerOpen,
+    quickOpen,
   ])
 
   if (fatalError) {
@@ -716,10 +1083,16 @@ export default function App() {
             fitOnOpenRef.current = false
             window.setTimeout(() => fitScene(api), 120)
           }
+          const focusId = focusElementRef.current
+          if (focusId) {
+            focusElementRef.current = null
+            window.setTimeout(() => revealElement(api, focusId), 180)
+          }
         }}
         initialData={initialData}
         onChange={handleChange}
         onPaste={handlePaste}
+        onLinkOpen={handleLinkOpen}
         onScrollChange={(scrollX, scrollY, zoom) => {
           if (presentationRef.current) {
             syncPresentationMask({ scrollX, scrollY, zoom: zoom.value })
@@ -758,12 +1131,25 @@ export default function App() {
               <WelcomeScreen.Center.MenuItemHelp />
             </WelcomeScreen.Center.Menu>
           </WelcomeScreen.Center>
-          <WelcomeScreen.Hints.MenuHint>Press Ctrl+B to switch boards.</WelcomeScreen.Hints.MenuHint>
+          <WelcomeScreen.Hints.MenuHint>
+            Press Ctrl+K to jump anywhere, or Ctrl+B to switch boards.
+          </WelcomeScreen.Hints.MenuHint>
           <WelcomeScreen.Hints.ToolbarHint>Pick a tool below and start drawing.</WelcomeScreen.Hints.ToolbarHint>
           <WelcomeScreen.Hints.HelpHint>Press ? anytime to see keyboard shortcuts.</WelcomeScreen.Hints.HelpHint>
         </WelcomeScreen>
 
         <MainMenu>
+          <MainMenu.Item
+            icon={<SearchIcon />}
+            shortcut="Ctrl+K"
+            onSelect={() => {
+              setDrawerOpen(false)
+              setTemplateOpen(false)
+              setQuickOpen(true)
+            }}
+          >
+            Quick switcher
+          </MainMenu.Item>
           <MainMenu.Item
             icon={<BoardsIcon />}
             shortcut="Ctrl+B"
@@ -799,6 +1185,25 @@ export default function App() {
           </MainMenu.Item>
           <MainMenu.Item icon={<UploadIcon />} onSelect={() => void importScene()}>
             Import scene…
+          </MainMenu.Item>
+          <MainMenu.Item icon={<DownloadIcon />} onSelect={() => void handleBackup()}>
+            Back up all boards…
+          </MainMenu.Item>
+          <MainMenu.Item icon={<UploadIcon />} onSelect={() => void handleRestore()}>
+            Restore backup…
+          </MainMenu.Item>
+          <MainMenu.Item icon={<MarkdownIcon />} onSelect={() => void handleExportMarkdown()}>
+            Export all boards to Markdown…
+          </MainMenu.Item>
+          <MainMenu.Separator />
+          <MainMenu.Item icon={<HistoryIcon />} onSelect={() => openHistory(board)}>
+            Version history…
+          </MainMenu.Item>
+          <MainMenu.Item icon={<LinkIcon />} onSelect={startLinkSelection}>
+            Link selection to a board…
+          </MainMenu.Item>
+          <MainMenu.Item icon={<LayoutIcon />} onSelect={startArrange}>
+            Arrange shapes as mind map…
           </MainMenu.Item>
           <MainMenu.Separator />
           <MainMenu.Item icon={<PlayIcon />} onSelect={startPresentation}>
@@ -850,6 +1255,17 @@ export default function App() {
           onClick={() => setDrawerOpen(true)}
         />
       )}
+      {!presentation && !zen && (
+        <button
+          type="button"
+          className="app-theme-toggle"
+          onClick={() => handleThemeChange(resolvedTheme === 'dark' ? 'light' : 'dark')}
+          title={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {resolvedTheme === 'dark' ? <SunIcon size={16} /> : <MoonIcon size={16} />}
+        </button>
+      )}
       {zen && !presentation && <ZenBar onExit={() => setZen(false)} />}
       {presentation && (
         <PresentationBar
@@ -871,6 +1287,8 @@ export default function App() {
         busy={busy}
         onClose={() => setDrawerOpen(false)}
         onOpen={(id) => void openBoard(id)}
+        onOpenContent={(boardId, elementId) => void openBoardAtElement(boardId, elementId)}
+        onSearchContent={searchCanvasText}
         onCreate={() => {
           setDrawerOpen(false)
           setTemplateOpen(true)
@@ -881,13 +1299,68 @@ export default function App() {
         onDelete={(target) => setDeleteTarget(target)}
         onToggleStar={(id, starred) => void handleStar(id, starred)}
         onThemeChange={handleThemeChange}
+        onEditTags={(target) => setTagsBoard(target)}
+        onOpenHistory={(target) => openHistory(target)}
+      />
+
+      <QuickSwitcher
+        open={quickOpen}
+        boards={boardIndex.boards}
+        onClose={() => setQuickOpen(false)}
+        onOpenBoard={(id) => void openBoard(id)}
+        onCreateFromTemplate={(id) => void createFromTemplate(id)}
+        onNewBlank={() => void createFromTemplate('blank')}
+        onOpenTemplates={() => {
+          setDrawerOpen(false)
+          setTemplateOpen(true)
+        }}
+        onOpenBoards={() => setDrawerOpen(true)}
+        onImport={() => void importScene()}
+        onBackup={() => void handleBackup()}
+        onRestore={() => void handleRestore()}
+        onPresent={startPresentation}
+        onZen={toggleZen}
+        onExportMarkdown={() => void handleExportMarkdown()}
+        onHistory={() => openHistory(board)}
+        onLinkSelection={startLinkSelection}
+        onArrangeMindMap={startArrange}
       />
 
       <TemplatePicker
         open={templateOpen}
         busy={busy}
+        theme={resolvedTheme}
         onClose={() => !busy && setTemplateOpen(false)}
         onPick={(id) => void createFromTemplate(id)}
+      />
+
+      <TagsDialog
+        open={Boolean(tagsBoard)}
+        board={tagsBoard}
+        allTags={allTags}
+        busy={busy}
+        onClose={() => setTagsBoard(null)}
+        onSave={(id, tags) => void handleSetTags(id, tags)}
+      />
+
+      <HistoryDialog
+        open={Boolean(historyBoard)}
+        board={historyBoard}
+        busy={busy}
+        onClose={() => setHistoryBoard(null)}
+        onRestore={(snapshot) => {
+          if (historyBoard) void handleRestoreVersion(historyBoard, snapshot)
+        }}
+        onCreateSnapshot={handleCreateSnapshot}
+      />
+
+      <LinkBoardDialog
+        open={linkOpen}
+        boards={boardIndex.boards}
+        activeId={board.id}
+        busy={busy}
+        onClose={() => setLinkOpen(false)}
+        onPick={handleLinkToBoard}
       />
 
       <ConfirmDialog
@@ -903,6 +1376,21 @@ export default function App() {
         busy={busy}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => void handleDelete()}
+      />
+
+      <ConfirmDialog
+        open={Boolean(arrangePlan)}
+        title="Arrange shapes as a mind map?"
+        body={
+          arrangePlan
+            ? `${arrangePlan.moved} ${arrangePlan.moved === 1 ? 'shape' : 'shapes'} will be repositioned in a ring around the busiest hub. A snapshot is saved first, so you can undo from Version history.`
+            : ''
+        }
+        confirmLabel="Arrange shapes"
+        icon={<LayoutIcon size={20} />}
+        busy={busy}
+        onCancel={() => setArrangePlan(null)}
+        onConfirm={() => void applyArrange()}
       />
     </div>
   )

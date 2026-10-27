@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getTemplate } from '../templates'
-import type { BoardMeta, ThemePreference } from '../types'
+import type { BoardMeta, BoardSearchHit, ThemePreference } from '../types'
 import {
   CloseIcon,
   DownloadIcon,
   DuplicateIcon,
+  HistoryIcon,
   LogoMark,
   MonitorIcon,
   MoonIcon,
@@ -13,6 +14,7 @@ import {
   SearchIcon,
   StarIcon,
   SunIcon,
+  TagIcon,
   TemplateGlyph,
   TrashIcon,
   UploadIcon,
@@ -28,6 +30,8 @@ type Props = {
   busy: boolean
   onClose: () => void
   onOpen: (id: string) => void
+  onOpenContent: (boardId: string, elementId: string) => void
+  onSearchContent: (query: string) => Promise<BoardSearchHit[]>
   onCreate: () => void
   onImport: () => void
   onRename: (id: string, name: string) => void
@@ -35,9 +39,16 @@ type Props = {
   onDelete: (board: BoardMeta) => void
   onToggleStar: (id: string, starred: boolean) => void
   onThemeChange: (theme: ThemePreference) => void
+  onEditTags: (board: BoardMeta) => void
+  onOpenHistory: (board: BoardMeta) => void
 }
 
 const relativeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+const KIND_LABELS: Record<BoardSearchHit['kind'], string> = {
+  text: 'Text',
+  label: 'Shape label',
+  frame: 'Frame',
+}
 
 function relativeTime(timestamp: number): string {
   const minutes = Math.round((Date.now() - timestamp) / 60000)
@@ -60,6 +71,8 @@ export function BoardDrawer({
   busy,
   onClose,
   onOpen,
+  onOpenContent,
+  onSearchContent,
   onCreate,
   onImport,
   onRename,
@@ -67,8 +80,13 @@ export function BoardDrawer({
   onDelete,
   onToggleStar,
   onThemeChange,
+  onEditTags,
+  onOpenHistory,
 }: Props) {
   const [query, setQuery] = useState('')
+  const [activeTag, setActiveTag] = useState<string | null>(null)
+  const [contentHits, setContentHits] = useState<BoardSearchHit[]>([])
+  const [searchingContent, setSearchingContent] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -79,12 +97,65 @@ export function BoardDrawer({
     inputRef.current?.select()
   }, [editingId])
 
+  useEffect(() => {
+    if (open) return
+    setQuery('')
+    setActiveTag(null)
+    setContentHits([])
+    setSearchingContent(false)
+    setEditingId(null)
+  }, [open])
+
+  useEffect(() => {
+    const normalized = query.trim()
+    if (!open || normalized.length < 2) {
+      setContentHits([])
+      setSearchingContent(false)
+      return
+    }
+
+    let cancelled = false
+    setContentHits([])
+    setSearchingContent(true)
+    const timer = window.setTimeout(() => {
+      onSearchContent(normalized)
+        .then((hits) => {
+          if (!cancelled) setContentHits(hits)
+        })
+        .catch((error) => {
+          console.error('Canvas search failed:', error)
+          if (!cancelled) setContentHits([])
+        })
+        .finally(() => {
+          if (!cancelled) setSearchingContent(false)
+        })
+    }, 220)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [query, open, onSearchContent])
+
+  const allTags = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const board of boards) {
+      for (const tag of board.tags) {
+        const key = tag.toLowerCase()
+        if (!seen.has(key)) seen.set(key, tag)
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b))
+  }, [boards])
+
   const visibleBoards = useMemo(() => {
     const normalized = query.trim().toLowerCase()
+    const tagged = activeTag ? activeTag.toLowerCase() : null
     return [...boards]
-      .filter((board) => !normalized || board.name.toLowerCase().includes(normalized))
+      .filter((board) => !normalized || board.name.toLowerCase().includes(normalized) || board.tags.some((tag) => tag.toLowerCase().includes(normalized)))
+      .filter((board) => !tagged || board.tags.some((tag) => tag.toLowerCase() === tagged))
       .sort((a, b) => Number(b.starred) - Number(a.starred) || b.updatedAt - a.updatedAt)
-  }, [boards, query])
+  }, [boards, query, activeTag])
 
   const startRename = (board: BoardMeta) => {
     setEditingId(board.id)
@@ -136,10 +207,34 @@ export function BoardDrawer({
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search boards"
-          aria-label="Search boards"
+          placeholder="Search boards and canvas text"
+          aria-label="Search boards and canvas text"
         />
       </label>
+
+      {allTags.length > 0 && (
+        <div className="tag-filter" role="group" aria-label="Filter boards by tag">
+          <button
+            type="button"
+            className={`tag-filter-chip${activeTag === null ? ' is-selected' : ''}`}
+            onClick={() => setActiveTag(null)}
+            aria-pressed={activeTag === null}
+          >
+            All
+          </button>
+          {allTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={`tag-filter-chip${activeTag === tag ? ' is-selected' : ''}`}
+              onClick={() => setActiveTag((current) => (current === tag ? null : tag))}
+              aria-pressed={activeTag === tag}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="drawer-section-label">
         <span>Your boards</span>
@@ -204,6 +299,15 @@ export function BoardDrawer({
                 <span className="board-meta">
                   {template.name} · {relativeTime(board.updatedAt)}
                 </span>
+                {board.tags.length > 0 && (
+                  <span className="board-tags">
+                    {board.tags.map((tag) => (
+                      <span key={tag} className="board-tag">
+                        {tag}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </div>
               <div className="board-actions">
                 <button
@@ -217,6 +321,30 @@ export function BoardDrawer({
                   }}
                 >
                   <StarIcon size={14} filled={board.starred} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn small"
+                  title="Edit tags"
+                  aria-label="Edit tags"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onEditTags(board)
+                  }}
+                >
+                  <TagIcon size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn small"
+                  title="Version history"
+                  aria-label="Version history"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onOpenHistory(board)
+                  }}
+                >
+                  <HistoryIcon size={14} />
                 </button>
                 <button
                   type="button"
@@ -258,10 +386,48 @@ export function BoardDrawer({
             </div>
           )
         })}
-        {!visibleBoards.length && (
+        {query.trim().length >= 2 && (
+          <div className="content-results">
+            <div className="drawer-section-label content-label">
+              <span>Canvas text</span>
+              <span>{searchingContent ? '…' : contentHits.length}</span>
+            </div>
+            {searchingContent && <div className="content-status">Searching canvas text…</div>}
+            {contentHits.map((hit) => (
+              <button
+                key={`${hit.boardId}:${hit.elementId}`}
+                type="button"
+                className="content-hit"
+                onClick={() => onOpenContent(hit.boardId, hit.elementId)}
+              >
+                <span className="content-meta">
+                  <span className="content-board">{hit.boardName}</span>
+                  <span className="content-kind">{KIND_LABELS[hit.kind]}</span>
+                </span>
+                <span className="content-snippet">
+                  <HighlightText text={hit.snippet} query={query.trim()} />
+                </span>
+              </button>
+            ))}
+            {!searchingContent && !contentHits.length && (
+              <div className="content-status">
+                {visibleBoards.length
+                  ? 'No canvas text matches.'
+                  : `No boards or canvas text match “${query.trim()}”.`}
+              </div>
+            )}
+          </div>
+        )}
+        {!visibleBoards.length && query.trim().length < 2 && (
           <div className="drawer-empty">
             <SearchIcon size={20} />
-            <p>No boards match “{query}”.</p>
+            <p>
+              {query.trim()
+                ? `No boards match “${query.trim()}”.`
+                : activeTag
+                  ? `No boards tagged “${activeTag}”.`
+                  : 'No boards yet.'}
+            </p>
           </div>
         )}
       </div>
@@ -310,4 +476,16 @@ export function BoardDrawer({
 
 function BoardGlyph({ templateId }: { templateId: string }) {
   return <TemplateGlyph name={getTemplate(templateId).icon} size={20} />
+}
+
+function HighlightText({ text, query }: { text: string; query: string }) {
+  const index = text.toLowerCase().indexOf(query.toLowerCase())
+  if (index < 0) return <>{text}</>
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + query.length)}</mark>
+      {text.slice(index + query.length)}
+    </>
+  )
 }
